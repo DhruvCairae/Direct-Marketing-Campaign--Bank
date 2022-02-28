@@ -1,0 +1,637 @@
+---
+title: "Direct Marketing Campaign- Bank"
+output: word_document
+---
+
+# Question 1: Exploratory Data Analysis
+The purpose of the analysis is to analyze data related to direct marketing campaign of a Portuguese banking institution. End goal is to develop a model which can predict which clients are likely to respond to a term deposit if contacted. This would lead to precious savings of resources and a more focused campaign. In order to develop the model, it is important to determine which of the observed variables are most associated with the chance of subscribing to a term deposit and how the important variables relate to the predicted probability that a client will subscribe to a term deposit.
+
+### Summary Statistics and Variable transformation & Elimination 
+All the categorical variables would be transformed into n-1 binary variables in order to proceed with the analysis. From the summary statistics it is clear that the variable pdays is not serving any purpose as nearly all values are 999. pdays is the number of days that passed by after the client was last contacted from a previous campaign where 999 means client was not previously contacted. Therefore, it should be removed.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(MASS)
+library(tidyverse)
+library(dbplyr)
+library(skimr)
+library(psych)
+library(fastDummies)
+library(ggplot2)
+library(lares)
+library(pdp)
+library(rms)
+
+#Uploading File and Summary Statistics
+file <- read_csv('C:/Users/nawal/Downloads/bank_trn.csv')
+skim(file)
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,results=FALSE}
+# Transforming categorical variables to binary numeric
+file_1 <- dummy_cols(file, select_columns = c('job',
+                                              'marital',
+                                              'education',
+                                              'default',
+                                              'housing',
+                                              'loan',
+                                              'contact',
+                                              'month',
+                                              'day_of_week',
+                                              'subscribed',
+                                              'poutcome'),
+                     remove_selected_columns = TRUE)
+
+#Removing one variable from each categorical variable to avoid perfect multicollinearity
+data <- subset(file_1, select = -c(job_unknown,
+                                   marital_unknown,
+                                   education_unknown,
+                                   default_unknown,
+                                   housing_unknown,
+                                   loan_unknown,
+                                   contact_telephone,
+                                   month_apr,
+                                   day_of_week_fri,
+                                   subscribed_no,
+                                   poutcome_nonexistent,
+                                   pdays)
+               )
+```
+
+### Correlation Analysis
+The following top ten variables have the strongest linear association with the response variable. Duration, nr.employed, and poutcome had the strongest correlations with the response variable. These variables indicate the last contact duration, number of employees, and outcome of the previous marketing campaign, respectively. As far as business intuition is concerned this is logical because if the prior outcome was successful and the contact lasted longer, it is more likely that the client is receptive to direct marketing. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+corr_var(data, # name of dataset
+         subscribed_yes, # name of variable to focus on
+         top = 10 # display top 10 correlations
+)
+```
+
+
+### Analysis of Variables of Interest 
+
+Large proportion of clients in the dataset have not subscribed to the term deposit. Sparsity is not particularly helpful.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(file, aes(x = factor(subscribed))) +
+  geom_bar(fill = c('red','green')) +
+  theme_classic()
+```
+
+Duration is significantly right skewed wherein most of the contact was for less than 500 seconds. In fact, as per box blot with 75% quantile being 320 seconds, anything over 5 minutes is an outlier. Distribution of number of employees is in peaks and valleys, does not appear to be consistent. Lot of outliers below the 25% quantile of 5100 as per the box plot. For the outcome of the previous campaign it's fairly obvious that the lion’s share is for the non-existent count which means the client has not been contacted before. Unfortunately, this is not an ideal situation as the reaction to a campaign cannot be discerned if most of the clients have never been contacted before. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(data$duration,main = "Duration", freq = FALSE)
+lines(density(data$duration), lwd = 5, col = 'blue')
+
+boxplot(data$duration,main = "Duration")
+
+hist(data$nr_employed,main = "number of employees", freq = FALSE)
+lines(density(data$nr_employed), lwd = 5, col = 'blue')
+
+boxplot(data$nr_employed, main = "number of employees")
+
+ggplot(file, aes(x = factor(poutcome))) +
+  geom_bar(fill = c('red','blue','green')) +
+  theme_classic()
+```
+
+# Question 2: Initial Modelling
+
+We attempt to build a logistic regression model based on the three most influential variables by correlation.
+
+```{r}
+head(file$subscribed)
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+model_data <- file[, c("subscribed","duration","nr_employed","poutcome")]
+
+# Convert strings to factors
+model_data$subscribed <- as.factor(model_data$subscribed)
+model_data$poutcome <- as.factor(model_data$poutcome)
+model_data$subscribed <- as.factor(model_data$subscribed)
+
+# Build the logistic regression model
+lmodel <- glm(subscribed ~ duration + nr_employed + poutcome,
+              family = binomial(link = "logit"),
+              data = model_data)
+
+summary(lmodel)
+```
+
+### Interpreting the model coefficients
+
+#### Coefficients for log odds
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+coef(lmodel)
+
+```
+
+#### Exponential coefficients
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+exp(coef(lmodel)) 
+
+```
+
+Increasing duration by d units improves the odds of a successful subscription by a factor of exp((1.004)\*d). The effect of increasing number of employees by n units is to increase the odds of a successful subscription by a factor of exp((0.985)\*n). A successful prior outcome increases the odds of a successful subscription by a factor of exp(7.218), or `r exp(7.218)`. In comparison, marketing to a new customer increases the odds of a successful subscription by a factor of exp(1.591), or `r exp(1.591)`.  
+
+### Influence of predictors on target variable
+
+Visualization of the partial effect of each of the predictor variables on the target variable are below.
+
+#### Duration of last contact
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+partial(lmodel, pred.var = "duration", prob = TRUE, plot = TRUE, rug = TRUE, plot.engine = "ggplot2") # + geom_rug(data = model_data, aes(x = duration), alpha = 0.2, inherit.aes = FALSE) + theme(panel.background = element_blank())
+
+```
+
+
+The last contact duration has a positive impact on the probability of a successful subscription.The plot indicates that beyond a certain threshold of duration, all else held constant, the odds of getting a successful subscription is 100%. However, this may need to be verified further.
+
+
+#### Number of employees
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+partial(lmodel, pred.var = "nr_employed", prob = TRUE, plot = TRUE, rug = TRUE,plot.engine = "ggplot2") # + geom_rug(data = model_data, aes(x = nr_employed), alpha = 0.2, inherit.aes = FALSE) + theme(panel.background = element_blank())
+
+```
+
+
+The plot indicates that there is a higher probability of term deposit subscription with lower number of employees and the odds decrease steeply as the number increases. This may be because a lower number of employees improve the chances of re-engagement with the same client which could positively impact customer relationship due to familiarity and stronger rapport.
+
+
+#### Prior Outcome
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+partial(lmodel, pred.var = "poutcome", prob = TRUE, plot = TRUE, rug = TRUE,plot.engine = "ggplot2") # + geom_rug(data = model_data, aes(x = poutcome), alpha = 0.2, inherit.aes = FALSE) + theme(panel.background = element_blank())
+
+```
+
+
+A successful prior marketing campaign outcome seems to improve the odds of having a successful  term deposit subscription as opposed to a non-existent or failed prior outcome.
+
+
+### Model Comparison and Hypothesis testing
+
+#### Null model with only intercept
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+nullmodel <- glm(subscribed ~ 1,
+                 family = binomial(link = "logit"),
+                 data = model_data)
+
+summary(nullmodel)
+
+```
+
+#### Chi-Squared test for model comparison
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+
+anova(nullmodel, lmodel, test = "Chi")
+
+```
+
+The p value is less than 0.05, indicating that the null hypothesis that the coefficients of the three predictor variables are 0 should be rejected. This implies that there is no statistically significant indication that duration, nr-employed and poutcome should be dropped from the model.
+
+### Accuracy Comparison with Null Model
+
+Brier scores are used to compare the accuracy of our initial model to the Null model.
+
+```{r}
+# Brier Model Scorer Function
+brier_scorer <- function(pred, actual) {
+  return(mean((pred - actual)^2))
+}
+
+# Convert subscribed results into a binary variable
+y <- ifelse(file$subscribed == "yes", 1, 0)
+
+# Prepare the file dataframe for use in stepAIC
+file %>% 
+  mutate(subscribed = as.factor(subscribed)) %>% 
+  dplyr::select(-pdays) -> file
+
+# Convert strings to factors to make file compatible with pdp::partial()
+file %>% mutate(across(.cols = where(is.character), .fns = as.factor)) -> file
+
+# Create a version of nullmodel that uses the file dataset
+nullmodel_2 <- glm(subscribed ~ 1, family = binomial, data = file)
+
+# Create a version of lmodel that uses the file dataset
+lmodel_2 <- glm(subscribed ~ duration + nr_employed + poutcome,
+                family = binomial,
+                data = file)
+
+# Calculate the Brier score for a hypothetical model that always predicts "no"
+always_no_bs <- brier_scorer(pred = 0, actual = y)
+
+# Calculate the Brier scores for lmodel_2 and nullmodel_2
+nullmodel_2_bs <- brier_scorer(pred = predict(nullmodel_2, type = "response"),
+                               actual = y)
+
+# Calculate the Brier score for lmodel_2
+lmodel_2_bs <- brier_scorer(pred = predict(lmodel_2, type = "response"),
+                            actual = y)
+```
+
+lmodel_2's Brier score of `r round(lmodel_2_bs, 5)` is lower than nullmodel_2's Brier score of `r round(nullmodel_2_bs, 5)`. Both have better performance than the always no model, which has a Brier score of `r round(always_no_bs, 5)`. This implies that lmodel_2 has superior accuracy to the null model.
+
+# Question 3: Model Fitting using Step-AIC
+
+## Selection Starting with Our Initial Model
+
+```{r, error=FALSE, warning=FALSE, message=FALSE}
+# Generate the full model
+full_model <- glm(subscribed ~ ., family = binomial, data = file)
+
+summary(full_model)
+
+# Reduce run-time by loading stepAIC results from disk if possible
+if (file.exists("model_2.RDS")) {
+  model_2 <- readRDS("model_2.RDS")
+} else {
+  model_2 <- stepAIC(object = lmodel_2,
+                     scope = list(lower = nullmodel_2, upper = full_model),
+                     direction = "both")
+  
+  # Save result to disk
+  saveRDS(model_2, file = "model_2.RDS")
+}
+
+summary(model_2)
+
+# Calculate the Brier score for model_2
+model_2_bs <- brier_scorer(pred = predict(model_2, type = "response"),
+                           actual = y)
+```
+
+Comparing this new model to our initial model, model_2 has a lot more variables than lmodel. It added month, emp_var_rate, job, cons_price_idx, contact, euribor3m, default, day_of_week, campaign, and cons_conf_idx. However, model_2 dropped nr_employed from the model.
+
+model_2's Brier score is `r round(model_2_bs, 5)` vs. lmodel_2's `r round(lmodel_2_bs, 5)`. model_2 has a slightly lower Brier score than lmodel_2 does. This indicates that model_2 is slightly better in terms of prediction accuracy.
+
+## Step AIC Forward Selection Starting from Null Model
+
+```{r, error=FALSE, warning=FALSE, message=FALSE}
+# Reduce run-time by loading stepAIC results from disk if possible
+if (file.exists("model_3.RDS")) {
+  model_3 <- readRDS("model_3.RDS")
+} else {
+  model_3 <- stepAIC(object = nullmodel_2,
+                     scope = list(lower = nullmodel_2, upper = full_model),
+                     direction = "forward")
+  
+  # Save result to disk
+  saveRDS(model_3, file = "model_3.RDS")
+}
+
+summary(model_3)
+
+# Calculate model_3's Brier score
+model_3_bs <- brier_scorer(pred = predict(model_3, type = "response"),
+                           actual = y)
+```
+
+This model has a rank of `r model_3$rank`, meaning that it uses `r model_3$rank - 1` predictors. In comparison, lmodel_2 was rank `r lmodel_2$rank` while model_2 was rank `r model_2$rank`. Now, let's determine what the difference between lmodel_2, model_2, and model_3.
+
+```{r}
+# Extract the term names for each model
+predictors_lmodel_2 <- attr(summary(lmodel_2)$terms, "term.labels")
+predictors_model_2 <- attr(summary(model_2)$terms, "term.labels")
+predictors_model_3 <- attr(summary(model_3)$terms, "term.labels")
+
+# Check that model_2 is a nested in model_3
+print(paste0("All model_2 variables appear in model_3: ",
+             all(predictors_model_2 %in% predictors_model_3)
+             )
+      )
+
+# Check to see if any variables in model_3 are not included in model_2
+print(paste0("model_3 only consists of predictors in model 2: ",
+             all(predictors_model_3 %in% predictors_model_2)
+             )
+      )
+# Identify the new variable that entered model_3
+predictors_model_3[!(predictors_model_3 %in% predictors_model_2)]
+
+# Check to see if lmodel_2 is nested in model_3
+print(paste0("lmodel_2 nested in model_3: ",
+             all(predictors_lmodel_2 %in% predictors_model_3)
+             )
+      )
+```
+
+This indicates that model_3 is model_2, just with the nr_employed variable added. Interestingly, this is a variable that was dropped when we built model_2 from lmodel_2 using both forward and backward stepwise selection. lmodel_2 is nested inside model_3.
+
+model_3 had a Brier score of `r round(brier_scorer(pred = predict(model_3, type = "response"), actual = y), 5)`. This is nearly identical to the Brier score for model_2. Therefore, model_3 doesn't appear to have a significantly improved accuracy despite introducing the nr_employed variable.
+
+## Step AIC Backward Selection from Full Model
+
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+# Reduce run-time by loading stepAIC results from disk if possible
+if (file.exists("model_4.RDS")) {
+  model_4 <- readRDS("model_4.RDS")
+} else {
+  model_4 <- stepAIC(object = full_model,
+                     scope = list(lower = nullmodel_2, upper = full_model),
+                     direction = "backward")
+  
+  # Save result to disk
+  saveRDS(model_4, file = "model_4.RDS")
+}
+
+summary(model_4)
+
+# model_4 Brier score
+model_4_bs <- brier_scorer(pred = predict(model_4, type = "response"),
+                           actual = y)
+```
+
+This is a rank `r model_4$rank` model. Thus, this model uses `r model_4$rank - 1` predictors. model_4 is now compared with the prior models.
+
+```{r}
+# Extract the terms from the model formula
+predictors_model_4 <- attr(summary(model_4)$terms, "term.labels")
+
+# Check to see if any predictors in model_4 are not in model_3
+print(paste0("All model_4 variables appear in model_3: ",
+             all(predictors_model_4 %in% predictors_model_3)
+             )
+      )
+# Check to see if any predictors in model_3 do not appear in model_4
+print(paste0("model_4 is identical to model_3: ",
+             all(predictors_model_3 %in% predictors_model_4)
+             )
+      )
+# Determine which variable was removed from model_3
+predictors_model_3[!(predictors_model_3 %in% predictors_model_4)]
+
+# Compare model_4 with model_2
+# Check to see if any predictors in model_4 are not in model_2
+print(paste0("All model_4 predictors appear in model_2: ",
+             all(predictors_model_4 %in% predictors_model_2)
+             )
+      )
+# Check to see if any predictors in model_2 do not appear in model_4
+print(paste0("All model_2 predictors appear in model_2: ",
+             all(predictors_model_2 %in% predictors_model_4)
+             )
+      )
+```
+
+Based on these results, model_4 is identical to model_2. Their formulas are also identical. However, the variables are in a different order. This is likely due to the forward and backward selections taking different paths.
+
+## Consideration of 2-Way Interactions
+
+```{r, message=FALSE, error=FALSE, warning=FALSE}
+# Reduce run-time by loading stepAIC results from disk if possible
+if (file.exists("model_5.RDS")) {
+  model_5 <- readRDS("model_5.RDS")
+} else {
+  model_5 <- stepAIC(object = lmodel_2,
+                     scope = list("lower" = ~ 1,
+                                  "upper" = ~ .^2),
+                     direction = "both")
+  
+  # Save result to disk
+  saveRDS(model_5, file = "model_5.RDS")
+}
+
+summary(model_5)
+
+# model_5 Brier score
+model_5_bs <- brier_scorer(pred = predict(model_5, type = "response"),
+                           actual = y)
+```
+
+This model is identical to lmodel_2, except it adds duration:nr_employed and duration:poutcome interaction terms. Coefficients are tiny for both of the duration:poutcome terms. Since these are binary variables, this implies that these interaction terms have a negligible effect on the log odds of a subscription. In contrast, duration:nr_employed is likely to be significant because the interaction has a mean of `r mean(file$duration * file$nr_employed)`.
+
+The ultimate test for determining whether the interaction terms should be included is model accuracy. model_5's Brier score is `r round(brier_scorer(pred = predict(model_5, type = "response"), actual = y), 5)`. This is worse than lmodel_2's Brier score of `r round(lmodel_2_bs, 5)`, despite the increased complexity of model_5. Therefore, it does not seem beneficial to add these terms.
+
+# Question 4: Model Selection
+
+Models 2, 3, and 4 had the best predictive accuracy based on their Brier scores. By a tiny margin (in the 5th decimal), model_3 outperformed models 2 and 3. lmodel_2 had a better Brier score than model_5, but both had worse performance than models 2, 3, and 4. The full model had the best performance with a Brier score of `r round(brier_scorer(pred = predict(full_model, type = "response"), actual = y), 5)`. However, this represents only a tiny increase in performance while increasing the rank to `r full_model$rank`. If only a single model could be chosen, model_3 should be chosen because of its high performance and comparative parsimony.
+
+lmodel_2 is the best model in terms of understanding relationships and explainability. There are only 3 predictors, making it easy to follow the model's logic. It does incorporate a categorical variable, but it only needed two dummy variables because it is a 3 level variable. In contrast, models 2, 3, and 4 have far more predictors, including dummy variables for every month represented in the data. However, it can be understood by simply going through every variable in the model. model_5 is the worst in terms of understanding relationships and explainability because it has interaction terms.
+
+model_3 is useful because it can predict the probability of obtaining a subscription. These probabilities could be used to rank potential subscribers based on the probability of conversion or to carry out classification given a threshold. This model can also recommend the timing of marketing campaigns based on month, day_of_week, and economic factor. However, additional data for the months not represented in the training set would be required to ensure that the model is capable of functioning year round.
+
+# Question 5: Predictor Importance Assessment
+
+For the reasons discussed in Question 4, model_3 will be used for this question. To assess the importance of each variable, we will pick the 3 variables with the highest magnitude coefficients. These variables will have the largest impact on the log odds of subscription.
+
+```{r}
+# Find the 3 variables with the highest magnitude coefficients
+sort(abs(coef(model_3)), decreasing = TRUE)[2:4]
+```
+
+defaultyes, monthmar, and cons_price_idx were the most influential predictors based on the magnitude of their coefficients. defaultyes, monthmar, and cons_price_idx have coefficients of `r coef(model_3)["defaultyes"]`, `r coef(model_3)["monthmar"]`, and `r coef(model_3)["cons_price_idx"]`, respectively. Note that defaultyes and monthmar are both derived from categorical variables, all of the dummy variables originating from these variables should be included.
+
+A prospect in default substantially reduces the odds of subscription by a multiplier of `r exp(coef(model_3)["defaultyes"])` compared with the baseline of no default. Campaigning in March improves the odds of conversion by a factor of `r exp(coef(model_3)["monthmar"])` compared to the baseline of April. An idx unit increase in the cons_price_idx improves the odds by a factor of exp(`r coef(model_3)["cons_price_idx"]` \* idx). Visualizations will give a better representation of the influence of each variable on the probability of subscription.
+
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+# Make a partial dependence plot for default
+partial(model_3,
+        pred.var = "default",
+        prob = TRUE,
+        plot = TRUE,
+        rug = TRUE,
+        plot.engine = "ggplot2",
+        train = file)
+```
+
+Based on this partial dependence plot, the probability of a successful conversion is far higher for someone that is not known to have credit in default than for someone who is known to have credit in default. This seems reasonable. People with bad credit would likely have less money available to open a term deposit. On the other hand, this trend may reflect a bias on the part of the sales team towards people with a history of default rather than the client's desire to subscribe to a term deposit.
+
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+# Plot a partial dependence plot for month.
+partial(model_3,
+        pred.var = "month",
+        prob = TRUE,
+        plot = TRUE,
+        rug = TRUE,
+        plot.engine = "ggplot2",
+        train = file)
+```
+
+One issue that this partial dependence plot illustrates is that there is only data for 10 of the 12 months in a year in the training dataset. Specifically, no data is available for January and February. Extra data would be needed to fix this issue.
+
+Reading the probabilities for the months in order, there doesn't appear to be a strong seasonal trend. March does seem to be the most productive month, though. It is unclear why March should be so prominent. This may indicate that this data was aggregated around or just after March, leading to an excess of clients that were last contacted in March.
+
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+# Plot a partial dependence plot for cons_price_idx.
+partial(model_3,
+        pred.var = "cons_price_idx",
+        prob = TRUE,
+        plot = TRUE,
+        rug = TRUE,
+        plot.engine = "ggplot2",
+        train = file)
+```
+
+There is a clear increase in the probability of subscription to a term deposit with cons_price_idx. This seems like a reasonable result. Interest on a term deposit would be a good way to protect assets from inflation. People who benefit from increased cash flows during times of higher cons_price_idx may also have more money to invest into term deposits.
+
+
+# Question 6: Data Leakage
+
+Data leakage occurs when your model uses (predictor) information that would not be available at prediction time. From our dataset we observe that we have data variables for the previous marketing campaign and customer attributes and the variables for current marketing campaign. 
+
+We have to predict the probability of the customer subscribing for term deposits, based on the previous campaign data. Current campaign attributes would not be available while predicting our response variable in the real case scenario. Thus, the current campaign variables would act as leakage variable in this case.
+
+Our best model from the modeling section is Step Wise AIC which gives us the least AIC. Thus, we remove the leakage variables from our data and re-use the step AIC approach to predict the subscribed probability.
+
+
+# Question 7: Predict for Test Data
+
+First, we need to build a model that doesn't use the leakage variables
+
+```{r}
+# Remove the leakage variables
+df <- subset(file, select = -c(duration, contact, day_of_week, month))
+
+# Convert subscribed into a factor variable
+df$subscribed <- as.factor(df$subscribed)
+```
+
+```{r}
+# Create a new null and full model based on the sealed data
+null_model_sealed <- glm(subscribed ~ 1,
+                         family = binomial(link = "logit"),
+                         data = df)
+
+full_model_sealed <- glm(subscribed ~ .,
+                         family = binomial(link = "logit"),
+                         data = df)
+```
+
+```{r}
+# Build a new model using AIC forward selection
+final_model <- step(object = null_model_sealed,
+                     scope = list(lower = null_model_sealed,
+                                  upper = full_model_sealed),
+                     direction = "forward")
+
+summary(final_model)
+```
+
+### Assessing performance
+
+```{r, message = FALSE, warning=FALSE}
+# Load the test dataset
+test <- read_csv("C:/Users/nawal/Downloads/bank_new.csv")
+
+# Remove leakage variables
+test_data <- subset(test, select = -c(contact, duration, month, day_of_week))
+
+# Convert subscribed to a factor
+test_data$subscribed <- as.factor(test_data$subscribed)
+```
+
+#### Confusion Matrix
+
+```{r}
+# Confusion matrix (i.e., 2x2 contingency table of classification results)
+y <- test_data$subscribed  # observed classes
+
+# Generate predicted probabilities for the predictors in test
+prob <- predict(final_model, newdata = test_data, type = "response")
+
+# Classify each observation, predicting a subscription if the predicted
+# probability exceeds 0.5.
+classes <- ifelse(prob > 0.5, "yes", "no")
+
+# Confusion matrix
+(cm <- table("actual" = y, "predicted" = classes))
+```
+
+#### Sensitivity and Specificity
+
+```{r}
+# Compute sensitivity and specificity
+tp <- sum(classes == "yes" & y == "yes")  # true positives
+tn <- sum(classes == "no"  & y == "no")  # true negatives
+fp <- sum(classes == "yes" & y == "no")  # false positives
+fn <- sum(classes == "no"  & y == "yes")  # false negatives
+tpr <- tp / (tp + fn)  # sensitivity
+tnr <- tn / (tn + fp)  # specificity
+print(paste0("Sensitivity : ", round(tpr, 2)) ) # sensitivity
+print(paste0("Specificity : ", round(tnr, 2)) ) # specificity
+```
+
+#### ROC Curve
+
+```{r, warning=FALSE, message=FALSE}
+plot(roc1 <- pROC::roc(y, predictor = prob))
+roc1
+```
+
+A ROC curve is a plot of TPR (Sensitivity) vs. 1-TNR (Specificity) for a range of thresholds (not just 0.5). We see that we get an AUC of 0.76. This indicates that this model has good discriminatory power.
+
+#### Calibration Plot
+
+```{r}
+# Function to compute lift and cumulative gain charts
+lift <- function(prob, y, pos.class = NULL, cumulative = TRUE) {
+  if (!all(sort(unique(y)) == c(0, 1))) {
+    if (is.null(pos.class)) {
+      stop("A value for `pos.class` is required whenever `y` is not a 0/1 ",
+           "outcome.", call. = FALSE)
+    }
+    y <- ifelse(y == pos.class, 1, 0)
+  }
+  ord <- order(prob, decreasing = TRUE)
+  prob <- prob[ord]
+  y <- y[ord]
+  prop <- seq_along(y) / length(y)
+  lift <- if (isTRUE(cumulative)) {
+    cumsum(y)
+  } else {
+    (cumsum(y) / seq_along(y)) / mean(y)
+  }
+  structure(list("lift" = lift, "prop" = prop, "cumulative" = cumulative,
+                 "y" = y), class = "lift")
+}
+
+l <- lift(prob, y = y, pos.class = "yes")
+plot(l[["prop"]], l[["lift"]], type = "l", 
+     xlab = "Proportion of sample", ylab = "Cumulative lift", 
+     las = 1, lwd = 2, col = 2)
+abline(0, sum(y == "yes"), lty = 2)
+```
+
+
+
+```{r}
+# Generate the calibration curve
+rms::val.prob(prob, y = unclass(y) - 1)
+```
+
+It appears that the final_model is well calibrated. However, it deviates slightly from the ideal calibration for probabilities in the middle of the range.
+
+
+The easiest way to select the top 500 customers for marketing is depending on the probability of out of sample prediction arranged in descending order
+
+```{r}
+
+customer_top_500 <- test_data %>% mutate(pred_prob = predict(final_model, newdata = test_data, type = "response")) %>% arrange(desc(pred_prob))%>% top_n(500)
+
+
+customer_top_500 %>% ggplot() +geom_bar(aes(x=subscribed))+
+  ggtitle("Top 500 household plot")
+
+customer_top_500$response_flag <- ifelse(customer_top_500$subscribed=='yes',1,0)
+
+
+mean(customer_top_500$response_flag)
+
+
+```
+
+As you can see the number of subscriber is 44% who selected the Term deposit product on the basis of selecting in descending order of probability.
